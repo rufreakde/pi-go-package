@@ -1,0 +1,11 @@
+node_modules
+sessions
+
+.DS_Store
+
+*.log
+
+agents
+
+auth.json
+mcp-cache.json
