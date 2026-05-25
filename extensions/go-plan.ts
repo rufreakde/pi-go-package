@@ -1,7 +1,7 @@
 import { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionUIDialogOptions, SessionManager } from "@earendil-works/pi-coding-agent";
-import { UserMessage, AssistantMessage } from "@earendil-works/pi-ai";
-import { readdirSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { UserMessage } from "@earendil-works/pi-ai";
+import {  existsSync } from "node:fs";
+import { findLatestFileFromDirectory, provideSkillLocationInformationToAgent, notify } from "./shared/shared.js"
 
 enum PipelinePlanningStages {
     "none" = 'none',
@@ -14,13 +14,12 @@ enum PipelinePlanningStages {
 // ---------------------------------------------------------------------
 // State tracking for the sequential pipeline
 // ---------------------------------------------------------------------
-const state = {
+const planState = {
   phase: null as PipelinePlanningStages | null,
   lastArtifact: null as string | null,
 };
 
 export default function (pi: ExtensionAPI) {
-  const extensionIdentifier = "go-plan"
 
   const PIPELINE_SKILLS = [
     "skill:discover",
@@ -33,10 +32,7 @@ export default function (pi: ExtensionAPI) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  const notify = async (ctx: ExtensionCommandContext | ExtensionContext, message: string, type?: "info" | "warning" | "error" | undefined) => {
-      ctx.ui.notify(message, type);
-      await sleep(1000);
-  }
+
 
   const handleGoPlan = async (args: string, ctx: ExtensionCommandContext) => {
 
@@ -56,19 +52,18 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    if (state.phase != PipelinePlanningStages["skill:design"]){
-      await notify(ctx,`🗑️ Resetting current pupeline which was in state: ${state.phase}`, "info");
-      state.phase = null;
+    if (planState.phase != PipelinePlanningStages["skill:design"]){
+      await notify(ctx,`🗑️ Resetting current pupeline which was in state: ${planState.phase}`, "info");
+      planState.phase = null;
       ctx.ui.setWorkingMessage(undefined)
       ctx.ui.setStatus("Phase",undefined)
     }else{
-      await notify(ctx,`🎬 Starting go planning journey ${state.phase}`, "info");
+      await notify(ctx,`🎬 Starting go planning journey ${planState.phase}`, "info");
     }
 
     try {
-      // TODO move to switch case instead and call it here and in on instead for retry mechanisms
-      state.phase = PipelinePlanningStages["skill:discover"];
-      state.lastArtifact = null;
+      planState.phase = PipelinePlanningStages["skill:discover"];
+      planState.lastArtifact = null;
       await discoverPhase(args,ctx,session)
     } catch (error) {
       await notify(ctx,`Pipeline failed: ${String(error)}`, "error");
@@ -101,7 +96,7 @@ export default function (pi: ExtensionAPI) {
   // on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
   // ---------------------------------------------------------------------
   pi.on("agent_end", async (event, ctx: ExtensionContext) => {
-    if ( !state.phase || state.phase == PipelinePlanningStages.none) {
+    if ( !planState.phase || planState.phase == PipelinePlanningStages.none) {
       return
     };
 
@@ -110,18 +105,18 @@ export default function (pi: ExtensionAPI) {
 
     const opts: ExtensionUIDialogOptions = { timeout: 100000 }
 
-    ctx.ui.setStatus("Phase",`${state.phase} -> ${getFollowupPhase(state.phase)}`)
+    ctx.ui.setStatus("Phase",`${planState.phase} -> ${getFollowupPhase(planState.phase)}`)
     // FOR DEBUGGING:
     //ctx.ui.confirm(`Continue go:plan? ${state.phase} -> ${getFollowupPhase(state.phase)} `, "yes", opts)
 
     // Determine the artifact for the current phase and see if it now exists
     let artifactPath: string | null = null;
-    switch (state.phase) {
+    switch (planState.phase) {
       case PipelinePlanningStages["skill:discover"]:
         artifactPath = findLatestDiscovery();
         if (artifactPath && existsSync(artifactPath)) {
-          state.phase = PipelinePlanningStages["skill:research"];
-          state.lastArtifact = artifactPath;
+          planState.phase = PipelinePlanningStages["skill:research"];
+          planState.lastArtifact = artifactPath;
           await notify(ctx, `✅ Discovery artifact found: ${artifactPath}`, "info");
           await researchPhase(artifactPath, ctx, session);
         }
@@ -129,8 +124,8 @@ export default function (pi: ExtensionAPI) {
       case PipelinePlanningStages["skill:research"]:
         artifactPath = findLatestResearch();
         if (artifactPath && existsSync(artifactPath)) {
-          state.phase = PipelinePlanningStages["skill:design"];
-          state.lastArtifact = artifactPath;
+          planState.phase = PipelinePlanningStages["skill:design"];
+          planState.lastArtifact = artifactPath;
           await notify(ctx, `✅ Research artifact found: ${artifactPath}`, "info");
           await designPhase(artifactPath, ctx, session);
         }
@@ -138,8 +133,8 @@ export default function (pi: ExtensionAPI) {
       case PipelinePlanningStages["skill:design"]:
         artifactPath = findLatestDesign();
         if (artifactPath && existsSync(artifactPath)) {
-          state.phase = PipelinePlanningStages["skill:plan"];
-          state.lastArtifact = artifactPath;
+          planState.phase = PipelinePlanningStages["skill:plan"];
+          planState.lastArtifact = artifactPath;
           await notify(ctx, `✅ Design artifact found: ${artifactPath}`, "info");
           await planPhase( artifactPath, ctx, session);
         }
@@ -147,8 +142,8 @@ export default function (pi: ExtensionAPI) {
       case PipelinePlanningStages["skill:plan"]:
         artifactPath = findLatestPlan();
         if (artifactPath && existsSync(artifactPath)) {
-          state.phase = null;
-          state.lastArtifact = artifactPath;
+          planState.phase = null;
+          planState.lastArtifact = artifactPath;
           await notify(ctx, `🎉 Pipeline finished! Plan artifact: ${artifactPath}`, "info");
           ctx.ui.setWorkingMessage(undefined)
           ctx.ui.setStatus("Phase",undefined)
@@ -157,21 +152,16 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  const provideSkillLocationInformationToAgent = (session: SessionManager, skillName: string) : void =>{
-      const infoLocationPrompt: UserMessage = {role: "user", content: `the skill '/skill:${skillName}' is your globally installed '${skillName}' pi skill.`, timestamp: Date.now()};
-      session.appendMessage(infoLocationPrompt)
-  }
-
   const discoverPhase = async (args: string, ctx: ExtensionCommandContext, session: SessionManager) => {
       // Step 1: Run discover
       await notify(ctx, "🚀 Phase 1: Discovery...", "info");
-      ctx.ui.setWorkingMessage(`...${state.phase}`)
-      ctx.ui.setStatus("Phase",`${state.phase}`)
+      ctx.ui.setWorkingMessage(`...${planState.phase}`)
+      ctx.ui.setStatus("Phase",`${planState.phase}`)
       const featureDescription = args ;
       provideSkillLocationInformationToAgent(session, "discover")
 
       const messagePrompt: UserMessage = {role: "user", content: `/skill:discover ${featureDescription}`, timestamp: Date.now()};
-      state.phase = PipelinePlanningStages["skill:discover"]
+      planState.phase = PipelinePlanningStages["skill:discover"]
 
       pi.sendUserMessage(messagePrompt.content)
       await notify(ctx, "⏳ Waiting for discovery artifact…", "info");
@@ -181,12 +171,12 @@ export default function (pi: ExtensionAPI) {
       // Step 2: Run research
       const previousPhaseResultPath = findLatestDiscovery();
       await notify(ctx, `🔍 Phase 2: Research on ${previousPhaseResultPath}...`, "info");
-      ctx.ui.setWorkingMessage(`...${state.phase}`)
-      ctx.ui.setStatus("Phase",`${state.phase}`)
+      ctx.ui.setWorkingMessage(`...${planState.phase}`)
+      ctx.ui.setStatus("Phase",`${planState.phase}`)
       provideSkillLocationInformationToAgent(session, "research")
 
       const messagePrompt: UserMessage = {role: "user", content: `/skill:research ${previousPhaseResultPath}`, timestamp: Date.now()};
-      state.phase = PipelinePlanningStages["skill:research"]
+      planState.phase = PipelinePlanningStages["skill:research"]
 
       pi.sendUserMessage(messagePrompt.content)
       await notify(ctx, "⏳ Waiting for research artifact…", "info");
@@ -196,12 +186,12 @@ export default function (pi: ExtensionAPI) {
       // Step 3: Run design
       const previousPhaseResultPath = findLatestResearch();
       await notify(ctx, `🖼️ Phase 3: Design wiith ${previousPhaseResultPath}...`, "info");
-      ctx.ui.setWorkingMessage(`...${state.phase}`)
-      ctx.ui.setStatus("Phase",`${state.phase}`)
+      ctx.ui.setWorkingMessage(`...${planState.phase}`)
+      ctx.ui.setStatus("Phase",`${planState.phase}`)
       provideSkillLocationInformationToAgent(session, "design")
 
       const messagePrompt: UserMessage = {role: "user", content: `/skill:design ${previousPhaseResultPath}`, timestamp: Date.now()};
-      state.phase = PipelinePlanningStages["skill:design"]
+      planState.phase = PipelinePlanningStages["skill:design"]
 
       pi.sendUserMessage(messagePrompt.content)
       await notify(ctx, "⏳ Waiting for design artifact…", "info");
@@ -211,45 +201,16 @@ export default function (pi: ExtensionAPI) {
       // Step 4: Run plan
       const previousPhaseResultPath = findLatestDesign();
       await notify(ctx, `✍️ Phase 4: Planning of design ${previousPhaseResultPath}...`, "info");
-      ctx.ui.setWorkingMessage(`...${state.phase}`)
-      ctx.ui.setStatus("Phase",`${state.phase}`)
+      ctx.ui.setWorkingMessage(`...${planState.phase}`)
+      ctx.ui.setStatus("Phase",`${planState.phase}`)
       provideSkillLocationInformationToAgent(session, "plan")
 
       const messagePrompt: UserMessage = {role: "user", content: `/skill:plan ${previousPhaseResultPath}`, timestamp: Date.now()};
-      state.phase = PipelinePlanningStages["skill:plan"]
+      planState.phase = PipelinePlanningStages["skill:plan"]
 
       pi.sendUserMessage(messagePrompt.content)
       await notify(ctx, "⏳ Waiting for plan artifact…", "info");
   }
-
-   const findLatestFileFromDirectory = (directory: string): string => {
-     // 1. Handle missing directory
-     if (!existsSync(directory)) {
-       return `Directory not found: ${directory}`;
-     }
-
-     // 2. Get files and their modification times
-     const files = readdirSync(directory)
-       .map((filename) => {
-         const path = join(directory, filename);
-         const stats = statSync(path);
-
-         if (stats.isFile()) {
-           return { path, mtime: stats.mtime.getTime() };
-         }
-         return null; // Return null for directories
-       })
-       .filter((file): file is { path: string; mtime: number } => file !== null); // Remove nulls
-
-     // 3. Handle empty directory
-     if (files.length === 0) {
-       return `No file found in directory: ${directory}`;
-     }
-
-     // 4. Sort by newest first and return the path
-     files.sort((a, b) => b.mtime - a.mtime);
-     return files[0].path;
-   };
 
   // Helper functions to find latest artifacts from each stage
   const findLatestDiscovery = () => {

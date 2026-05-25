@@ -13,7 +13,7 @@ export default function (pi: ExtensionAPI) {
       
       try {
         await initializeGoEnvironment(ctx);
-        ctx.ui.notify("Successfully initialized pi go environment!", "success");
+        ctx.ui.notify("Successfully initialized pi go environment!", "info");
       } catch (error) {
         ctx.ui.notify(`Initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
       }

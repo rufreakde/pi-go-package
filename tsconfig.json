@@ -20,7 +20,7 @@
 	"include": [
 		"extensions/*.ts",
 		"test/**/*.ts"
-	],
+, "extensions/shared/shared.ts"	],
 	"exclude": [
 		"**/node_modules/**",
 		"**/.pi/**",
