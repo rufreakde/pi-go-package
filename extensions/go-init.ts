@@ -4,6 +4,9 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { basename, resolve } from "node:path";
 
+// TODO create a .pi/SYSTEM.md to override default system prompt make it for golang
+// https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/usage.md
+
 export default function (pi: ExtensionAPI) {
   // Register the /go:init command
   pi.registerCommand("go:init", {
