@@ -1,7 +1,7 @@
 {
   "lastChangelogVersion": "0.74.1",
   "defaultProvider": "openrouter",
-  "defaultModel": "deepseek/deepseek-v4-flash:free",
+  "defaultModel": "openrouter/free",
   "packages": [
     "npm:pi-mcp-adapter",
     "npm:@juicesharp/rpiv-ask-user-question",
